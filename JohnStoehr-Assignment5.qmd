@@ -1,0 +1,322 @@
+---
+title: "John Stoehr HW5"
+format: pdf
+editor: visual
+echo: false
+---
+
+```{r,message=FALSE,warning=FALSE}
+library(tidyverse)
+library(sf)
+library(dplyr)
+library(igraph)
+library(tidygraph)
+```
+
+## Question 1: Mapping the Network
+
+```{r,message=FALSE, warning=FALSE}
+setwd("C:/Users/jstoe/OneDrive/Documents/PLAN372_HW5/network_data/network_data")
+
+connected <- st_read("connected_points.gpkg", quiet = TRUE)
+unconnected <- st_read("unconnected_points.gpkg", quiet = TRUE)
+network <- st_read("network.gpkg", quiet = TRUE)
+
+ggplot() +
+  geom_sf(data = network, color = "gray", size = 0.5) +
+  geom_sf(data = connected, color = "blue", size = 2) +
+  geom_sf(data = unconnected, color = "red", size = 2) +
+  labs(title = "Water Systems",
+       color = "System Type") +
+  theme_minimal()
+
+```
+
+Above is a map visualizing the statewide network of water system interconnections. The map distinguishes between:
+
+-   **Blue points**: Connected systems
+
+-   **Red points**: Unconnected systems
+
+-   **Gray lines**: Network/Interconnections
+
+The map shows a large cluster of unconnected systems, especially in central and eastern parts of the state. However, many systems, especially in the west and scattered throughout the center, remain connected.
+
+## Question 2: Map and Graph of the Network
+
+```{r,message=FALSE,warning=FALSE,echo=FALSE}
+setwd("C:/Users/jstoe/OneDrive/Documents/PLAN372_HW5/network_data/network_data")
+
+edges <- st_read("network.gpkg", quiet = TRUE) %>%
+  mutate(edgeID = row_number())
+
+# Extract start and end node coordinates for each line
+nodes <- edges %>%
+  st_coordinates() %>%
+  as_tibble() %>%
+  rename(edgeID = L1) %>%
+  group_by(edgeID) %>%
+  slice(c(1, n())) %>%
+  ungroup() %>%
+  mutate(start_end = rep(c("start", "end"), times = n()/2))
+
+# Assign unique node IDs based on unique XY combinations
+nodes <- nodes %>%
+  mutate(xy = paste(X, Y)) %>%
+  mutate(nodeID = group_indices(., factor(xy, levels = unique(xy)))) %>%
+  select(-xy)
+
+# Create from–to columns for the edges
+source_nodes <- nodes %>% 
+  filter(start_end == "start") %>%
+  pull(nodeID)
+
+target_nodes <- nodes %>%
+  filter(start_end == "end") %>%
+  pull(nodeID)
+
+edges <- edges %>%
+  mutate(from = source_nodes, to = target_nodes)
+
+#Remove duplicates:
+nodes <- nodes %>%
+  distinct(nodeID, .keep_all = TRUE) %>%
+  select(-c(edgeID, start_end)) %>%
+  st_as_sf(coords = c('X', 'Y')) %>%
+  st_set_crs(st_crs(edges))
+
+graph <- tbl_graph(nodes = nodes, edges = as_tibble(edges), directed = FALSE)
+
+
+# Map the graph
+ggplot() +
+  geom_sf(data = edges, color = "gray", size = 0.5) +
+  geom_sf(data = nodes, color = "blue", size = 2) +
+  labs(title = "Water System Interconnection Graph") +
+  theme_minimal()
+
+
+```
+
+-   **Nodes** represent water systems (start and end points of lines)
+
+-   **Edges** represent physical connections between them
+
+Being able to visualize and analyze these interconnections helps to better identify opportunities for improving these interconnections. We can use this graph to assess which areas are under served, which systems are highly connected, and which systems are most critical.
+
+## Question 3
+
+```{r,message=FALSE,warning=FALSE}
+setwd("C:/Users/jstoe/OneDrive/Documents/PLAN372_HW5/network_data/network_data")
+
+edges_sf <- edges %>%
+  mutate(edge_length = as.numeric(st_length(.)))
+
+graph <- graph %>%
+  activate(edges) %>%
+  mutate(edge_length = edges_sf$edge_length)
+
+
+graph <- graph %>%
+  activate(nodes) %>%
+  mutate(degree = centrality_degree()) %>%
+  mutate(betweenness = centrality_betweenness(weights = edge_length)) %>%
+  activate(edges) %>%
+  mutate(betweenness = centrality_edge_betweenness(weights = edge_length))
+
+#Betweeness Centrality
+betweeness_centrality_graph <- ggplot() +
+  geom_sf(data = graph %>% 
+            activate(edges) %>% 
+            as_tibble() %>% 
+            st_as_sf(), 
+          color = 'grey50') + 
+  geom_sf(data = graph %>%
+            activate(nodes) %>%
+            as_tibble() %>%
+            st_as_sf(), 
+          aes(color = betweenness, size = betweenness)) +
+  scale_colour_viridis_c(option = 'inferno') +
+  scale_size_continuous(range = c(0, 4)) +
+  labs(title = "Betweenness Centrality of Water Systems in NC") +
+  theme_minimal()
+
+#Degree centrality
+degree_centrality_graph <- ggplot() +
+  geom_sf(data = graph %>%
+            activate(edges) %>%
+            as_tibble() %>%
+            st_as_sf(),
+          color = 'grey60', size = 0.4) +
+  geom_sf(data = graph %>%
+            activate(nodes) %>%
+            as_tibble() %>%
+            st_as_sf(),
+          aes(color = degree, size = degree)) +
+  scale_color_viridis_c(option = "inferno", name = "Degree") +
+  scale_size_continuous(range = c(0, 4), name = "Degree") +
+  labs(title = "Degree Centrality of Water Systems in NC") +
+  theme_minimal()
+
+betweeness_centrality_graph
+degree_centrality_graph
+```
+
+Moving on, I computed two key centrality measures:
+
+-   **Degree Centrality**: Measures how many direct connections a node has
+
+-   **Betweenness Centrality**: Measures how often a node lies on the shortest path between other nodes
+
+In the betweenness centrality map, we see many key systems that have a high betweenness centrality, acting as connectors between otherwise separated networks. For example, the nodes in the north central part of the graph are colored yellow, indicated their high importance in facilitating the transfer of water statewide. Their disruption would likely cause a fragmentation in the network, limiting the rest.
+
+In the degree centrality map, we see that the systems with high degree centrality are not always the same as those with high betweenness centrality. For example, the only yellow node in the north east of the map may act as a hub for other networks. This node is important in that area, but unlike betweenness centrality, it may not be crucial statewide.
+
+## Question 4:
+
+```{r,warning=FALSE,message=FALSE}
+setwd("C:/Users/jstoe/OneDrive/Documents/PLAN372_HW5/network_data/network_data")
+
+# Define locations
+chapel_hill_pt <- st_sfc(st_point(c(-79.05, 35.91)), crs = 4326)
+cary_pt <- st_sfc(st_point(c(-78.78, 35.78)), crs = 4326)
+raleigh_pt <- st_sfc(st_point(c(-78.64, 35.78)), crs = 4326)
+
+# Find nearest network nodes
+nodes <- graph %>% 
+  activate(nodes) %>% 
+  as_tibble() %>% 
+  st_as_sf()
+
+chapel_hill_node <- nodes %>% 
+  slice(st_nearest_feature(chapel_hill_pt, nodes)) %>% 
+  pull(nodeID)
+
+cary_node <- nodes %>% 
+  slice(st_nearest_feature(cary_pt, nodes)) %>% 
+  pull(nodeID)
+
+raleigh_node <- nodes %>% 
+  slice(st_nearest_feature(raleigh_pt, nodes)) %>% 
+  pull(nodeID)
+
+#Shortest Path from Cary to OWASA
+path_cary <- shortest_paths(
+  graph = graph,
+  from = cary_node,
+  to = chapel_hill_node,
+  output = 'both',
+  weights = graph %>% activate(edges) %>% pull(edge_length))
+
+path_cary_graph <- graph %>%
+  subgraph.edges(eids = path_cary$epath %>% unlist()) %>%
+  as_tbl_graph()
+
+shortest_cary_distance <- path_cary_graph %>%
+  activate(edges) %>%
+  as_tibble() %>%
+  summarize(total_distance_m = sum(edge_length))
+
+#Shortest Path from Raleigh to OWASA
+path_raleigh <- shortest_paths(
+  graph = graph,
+  from = raleigh_node,
+  to = chapel_hill_node,
+  output = 'both',
+  weights = graph %>% activate(edges) %>% pull(edge_length))
+
+path_raleigh_graph <- graph %>%
+  subgraph.edges(eids = path_raleigh$epath %>% unlist()) %>%
+  as_tbl_graph()
+
+shortest_raleigh_distance <- path_raleigh_graph %>%
+  activate(edges) %>%
+  as_tibble() %>%
+  summarize(total_distance_m = sum(edge_length))
+
+print(paste("Shortest distance from Raleigh to OWASA", round(shortest_raleigh_distance, 2), "meters away."))
+
+print(paste("Shortest distance from Cary to OWASA", round(shortest_cary_distance, 2), "meters away."))
+
+# Node IDs from Cary to OWASA path
+cary_node_ids <- path_cary$vpath[[1]] %>% as.integer()
+
+# Node IDs from Raleigh to OWASA path
+raleigh_node_ids <- path_raleigh$vpath[[1]] %>% as.integer()
+
+cary_path_nodes <- nodes %>% 
+  filter(nodeID %in% cary_node_ids)
+
+raleigh_path_nodes <- nodes %>% 
+  filter(nodeID %in% raleigh_node_ids)
+
+#st_coordinates(cary_path_nodes)
+#st_coordinates(raleigh_path_nodes)
+```
+
+In this question. I evaluated the shortest-path connection from OWASA to Cary and Raleigh:
+
+1.  **Cary to OWASA**:
+
+    -   **Distance**: 41,840.74 meters
+
+    -   **Path**: The shortest path between Cary and OWASA is about 41,841 meters. On this path, it foes through Wake County as well as Raleigh, before continuing to Chapel Hill. This path represents a well connected network of the statewide water infrastructure.
+
+2.  **Raleigh to OWASA**:
+
+    -   **Distance**: 42,232.69 meters
+
+    -   **Path**: Slightly longer and more complex than the Cary route. The path from Raleigh to OWASA involves passing through areas including Raleigh, Wake County, and the outskirts of Durham County before arriving at Chapel Hill.
+
+Although the two distances are similar, Cary remains the slightly shorter path. Due to this finding, OWASA should be getting their water from Cary as it would be cheaper than sourcing from Raleigh
+
+## Question 5
+
+```{r,warning=FALSE,message=FALSE}
+setwd("C:/Users/jstoe/OneDrive/Documents/PLAN372_HW5/network_data/network_data")
+
+#Coordinates for Town of Liberty, NC
+liberty_pt <- st_sfc(st_point(c(-79.5736, 35.8679)), crs = 4326)
+
+#Nearest connected system to Liberty
+nearest_id <- st_nearest_feature(liberty_pt, connected)
+
+nearest_connected <- connected[nearest_id, ]
+
+# Calculate distance from Liberty to every connected system
+connected$distance_m <- st_distance(liberty_pt, connected) %>% 
+  as.numeric()
+# Sort connected systems by proximity to Liberty
+connected_sorted <- connected %>%
+  arrange(distance_m)
+# View top 5 closest connected systems
+# head(connected_sorted, 5)
+
+liberty_dist <- st_distance(liberty_pt, nearest_connected)
+print(paste("Nearest connected system is", round(liberty_dist, 2), "meters away."))
+
+
+
+```
+
+To get a better understanding of the connections Liberty has nearby, here are the top five closest connections:
+
+1.  **Ramseur, Town Of**
+
+2.  **Franklinville, Town Of**
+
+3.  **Siler City, City Of**
+
+4.  **Village Of Alamance**
+
+5.  **Randleman, City Of**
+
+Each of these systems is within relative proximity to Liberty and could serve as viable options for interconnection.
+
+**Challenges for Liberty:**
+
+-   **Infrastructure costs:** Building a new connection spanning 16,000 meters would require significant capital investment.
+
+-   **Regulatory Compliance:** Water systems must comply with stingy regulations regarding water quality and treatment.
+
+-   **Topography:** Terrain for which the systems will be under must be of good use. For example, if the pipeline must cross private property or environmental zones, Liberty would need to reroute or work out a deal.
