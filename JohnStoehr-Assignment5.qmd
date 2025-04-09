@@ -5,6 +5,8 @@ editor: visual
 echo: false
 ---
 
+github link: <https://github.com/JohnStoehr10/PLAN372-HW5.git>
+
 ```{r,message=FALSE,warning=FALSE}
 library(tidyverse)
 library(sf)
@@ -47,6 +49,8 @@ The map shows a large cluster of unconnected systems, especially in central and 
 ```{r,message=FALSE,warning=FALSE,echo=FALSE}
 setwd("C:/Users/jstoe/OneDrive/Documents/PLAN372_HW5/network_data/network_data")
 
+sf_to_tidygraph = function(x, directed = TRUE) {
+
 edges <- st_read("network.gpkg", quiet = TRUE) %>%
   mutate(edgeID = row_number())
 
@@ -60,13 +64,11 @@ nodes <- edges %>%
   ungroup() %>%
   mutate(start_end = rep(c("start", "end"), times = n()/2))
 
-# Assign unique node IDs based on unique XY combinations
-nodes <- nodes %>%
+nodes <- nodes %>% 
   mutate(xy = paste(X, Y)) %>%
   mutate(nodeID = group_indices(., factor(xy, levels = unique(xy)))) %>%
   select(-xy)
 
-# Create from–to columns for the edges
 source_nodes <- nodes %>% 
   filter(start_end == "start") %>%
   pull(nodeID)
@@ -85,16 +87,31 @@ nodes <- nodes %>%
   st_as_sf(coords = c('X', 'Y')) %>%
   st_set_crs(st_crs(edges))
 
-graph <- tbl_graph(nodes = nodes, edges = as_tibble(edges), directed = FALSE)
+tbl_graph(nodes = nodes, edges = as_tibble(edges), directed = directed)
 
+}
 
-# Map the graph
+graph <- sf_to_tidygraph("network.gpkg")
+
+sf_to_tidygraph(network, directed = FALSE)
+
+graph <- graph %>%
+  activate(edges) %>%
+  mutate(length = st_length(geom))
+
+graph
+
 ggplot() +
-  geom_sf(data = edges, color = "gray", size = 0.5) +
-  geom_sf(data = nodes, color = "blue", size = 2) +
+  geom_sf(data = graph %>% 
+            activate(edges) %>% 
+            as_tibble() %>% 
+            st_as_sf(), size = 0.5, color = "gray") + 
+  geom_sf(data = graph %>% 
+            activate(nodes) %>% 
+            as_tibble() %>% 
+            st_as_sf(), size = 2, color = "blue") +
   labs(title = "Water System Interconnection Graph") +
   theme_minimal()
-
 
 ```
 
@@ -116,45 +133,30 @@ graph <- graph %>%
   activate(edges) %>%
   mutate(edge_length = edges_sf$edge_length)
 
-
 graph <- graph %>%
   activate(nodes) %>%
   mutate(degree = centrality_degree()) %>%
-  mutate(betweenness = centrality_betweenness(weights = edge_length)) %>%
+  mutate(betweenness = centrality_betweenness(weights = length)) %>%
   activate(edges) %>%
-  mutate(betweenness = centrality_edge_betweenness(weights = edge_length))
+  mutate(betweenness = centrality_edge_betweenness(weights = length))
+
+graph
 
 #Betweeness Centrality
 betweeness_centrality_graph <- ggplot() +
-  geom_sf(data = graph %>% 
-            activate(edges) %>% 
-            as_tibble() %>% 
-            st_as_sf(), 
-          color = 'grey50') + 
-  geom_sf(data = graph %>%
-            activate(nodes) %>%
-            as_tibble() %>%
-            st_as_sf(), 
-          aes(color = betweenness, size = betweenness)) +
+  geom_sf(data = graph %>% activate(edges) %>% as_tibble() %>% st_as_sf(), col = 'grey50') + 
+  geom_sf(data = graph %>% activate(nodes) %>% as_tibble() %>% st_as_sf(), aes(col = betweenness, size = betweenness)) +
   scale_colour_viridis_c(option = 'inferno') +
-  scale_size_continuous(range = c(0, 4)) +
-  labs(title = "Betweenness Centrality of Water Systems in NC") +
+  scale_size_continuous(range = c(0,4)) +
+  labs(title = "Betweeness Centrality of Water Systems in NC") +
   theme_minimal()
 
 #Degree centrality
-degree_centrality_graph <- ggplot() +
-  geom_sf(data = graph %>%
-            activate(edges) %>%
-            as_tibble() %>%
-            st_as_sf(),
-          color = 'grey60', size = 0.4) +
-  geom_sf(data = graph %>%
-            activate(nodes) %>%
-            as_tibble() %>%
-            st_as_sf(),
-          aes(color = degree, size = degree)) +
-  scale_color_viridis_c(option = "inferno", name = "Degree") +
-  scale_size_continuous(range = c(0, 4), name = "Degree") +
+degree_centrality_graph <-ggplot() +
+  geom_sf(data = graph %>% activate(edges) %>% as_tibble() %>% st_as_sf(), col = 'grey50') + 
+  geom_sf(data = graph %>% activate(nodes) %>% as_tibble() %>% st_as_sf(), aes(col = degree, size = degree)) +
+  scale_colour_viridis_c(option = 'inferno') +
+  scale_size_continuous(range = c(0,4)) +
   labs(title = "Degree Centrality of Water Systems in NC") +
   theme_minimal()
 
@@ -177,66 +179,98 @@ In the degree centrality map, we see that the systems with high degree centralit
 ```{r,warning=FALSE,message=FALSE}
 setwd("C:/Users/jstoe/OneDrive/Documents/PLAN372_HW5/network_data/network_data")
 
-# Define locations
-chapel_hill_pt <- st_sfc(st_point(c(-79.05, 35.91)), crs = 4326)
-cary_pt <- st_sfc(st_point(c(-78.78, 35.78)), crs = 4326)
-raleigh_pt <- st_sfc(st_point(c(-78.64, 35.78)), crs = 4326)
-
-# Find nearest network nodes
-nodes <- graph %>% 
-  activate(nodes) %>% 
-  as_tibble() %>% 
-  st_as_sf()
-
-chapel_hill_node <- nodes %>% 
-  slice(st_nearest_feature(chapel_hill_pt, nodes)) %>% 
-  pull(nodeID)
-
-cary_node <- nodes %>% 
-  slice(st_nearest_feature(cary_pt, nodes)) %>% 
-  pull(nodeID)
-
-raleigh_node <- nodes %>% 
-  slice(st_nearest_feature(raleigh_pt, nodes)) %>% 
-  pull(nodeID)
-
-#Shortest Path from Cary to OWASA
-path_cary <- shortest_paths(
+distances <- distances(
   graph = graph,
-  from = cary_node,
-  to = chapel_hill_node,
-  output = 'both',
-  weights = graph %>% activate(edges) %>% pull(edge_length))
+  weights = graph %>% activate(edges) %>% pull(length)
+)
 
-path_cary_graph <- graph %>%
-  subgraph.edges(eids = path_cary$epath %>% unlist()) %>%
-  as_tbl_graph()
+distances[1:5, 1:5]
+ #Raleigh to Chapel Hill
 
-shortest_cary_distance <- path_cary_graph %>%
-  activate(edges) %>%
-  as_tibble() %>%
-  summarize(total_distance_m = sum(edge_length))
+from_raleigh_node <- graph %>%
+  activate(nodes) %>%
+  filter(nodeID == 37) %>%
+  pull(nodeID)
 
-#Shortest Path from Raleigh to OWASA
+to_chapel_hill_node <- graph %>%
+  activate(nodes) %>%
+  filter(nodeID == 31) %>%
+  pull(nodeID)
+
 path_raleigh <- shortest_paths(
   graph = graph,
-  from = raleigh_node,
-  to = chapel_hill_node,
+  from = from_raleigh_node,
+  to = to_chapel_hill_node,
   output = 'both',
-  weights = graph %>% activate(edges) %>% pull(edge_length))
-
+  weights = graph %>% activate(edges) %>% pull(length))
+  
+  
 path_raleigh_graph <- graph %>%
-  subgraph.edges(eids = path_raleigh$epath %>% unlist()) %>%
-  as_tbl_graph()
+    subgraph.edges(eids = path_raleigh$epath %>% unlist()) %>%
+    as_tbl_graph() 
+  
+path_raleigh_graph
 
-shortest_raleigh_distance <- path_raleigh_graph %>%
+
+raleigh_distance <- path_raleigh_graph %>%
   activate(edges) %>%
   as_tibble() %>%
-  summarize(total_distance_m = sum(edge_length))
+  summarise(length = sum(length))
 
-print(paste("Shortest distance from Raleigh to OWASA", round(shortest_raleigh_distance, 2), "meters away."))
+ggplot() +
+  geom_sf(data = graph %>% activate(edges) %>% as_tibble() %>% st_as_sf(), col = 'darkgrey') +
+  geom_sf(data = graph %>% activate(nodes) %>% as_tibble() %>% st_as_sf(), col = 'darkgrey', size = 0.5) +
+  geom_sf(data = path_raleigh_graph %>% activate(edges) %>% as_tibble() %>% st_as_sf(), lwd = 1, col = 'firebrick') +
+  geom_sf(data = path_raleigh_graph %>% activate(nodes) %>% filter(nodeID %in% c(from_raleigh_node, to_chapel_hill_node)) %>% as_tibble() %>% st_as_sf(), size = 2)
 
-print(paste("Shortest distance from Cary to OWASA", round(shortest_cary_distance, 2), "meters away."))
+#Cary to Chapel Hill
+graph <- graph %>%
+  activate(edges) %>%
+  mutate(length = as.numeric(st_length(geom)))
+
+path_cary_graph %>%
+  activate(edges) %>%
+  as_tibble() %>%
+  select(from, to, length)
+
+
+length(path_cary$epath[[1]])
+
+
+from_cary_node <- graph %>%
+  activate(nodes) %>%
+  filter(nodeID == 41) %>%
+  pull(nodeID)
+
+path_cary <- shortest_paths(
+  graph = graph,
+  from = from_cary_node,
+  to = to_chapel_hill_node,
+  output = 'both',
+  weights = graph %>% activate(edges) %>% pull(length))
+
+path_cary$vpath_cary
+
+path_cary_graph <- graph %>%
+    subgraph.edges(eids = path_cary$epath %>% unlist()) %>%
+    as_tbl_graph()
+
+path_cary_graph
+ 
+cary_distance <- path_cary_graph %>%
+  activate(edges) %>%
+  as_tibble() %>%
+  summarise(length = sum(length))
+
+ggplot() +
+  geom_sf(data = graph %>% activate(edges) %>% as_tibble() %>% st_as_sf(), col = 'darkgrey') +
+  geom_sf(data = graph %>% activate(nodes) %>% as_tibble() %>% st_as_sf(), col = 'darkgrey', size = 0.5) +
+  geom_sf(data = path_cary_graph %>% activate(edges) %>% as_tibble() %>% st_as_sf(), lwd = 1, col = 'firebrick') +
+  geom_sf(data = path_cary_graph %>% activate(nodes) %>% filter(nodeID %in% c(from_cary_node, to_chapel_hill_node)) %>% as_tibble() %>% st_as_sf(), size = 2)
+
+print(paste("Shortest distance from Raleigh to OWASA", round(raleigh_distance, 2), "meters away."))
+
+print(paste("Shortest distance from Cary to OWASA", round(cary_distance, 2), "meters away."))
 
 # Node IDs from Cary to OWASA path
 cary_node_ids <- path_cary$vpath[[1]] %>% as.integer()
